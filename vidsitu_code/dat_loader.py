@@ -19,6 +19,7 @@ from utils.dat_utils import (
     read_file_with_assertion,
 )
 from transformers import GPT2TokenizerFast, RobertaTokenizerFast
+import os
 
 
 def st_ag(ag):
@@ -154,6 +155,11 @@ class VsituDS(Dataset):
             vsitu_ann_dct[vseg].append(vseg_ann)
         self.vsitu_ann_dct = vsitu_ann_dct
 
+        ### REMOVE Unavailable data
+        available_seg = set(os.listdir(self.vsitu_frm_dir))
+        self.vseg_lst = [x for x in self.vseg_lst if x in available_seg]
+        self.vsitu_ann_dct = {k: v for k,v in self.vsitu_ann_dct.items() if k in available_seg}
+
         if "valid" in split_type or "test" in split_type:
             vseg_info_lst = read_file_with_assertion(vinfo_files_cfg[split_type])
             vsitu_vinfo_dct = {}
@@ -171,6 +177,8 @@ class VsituDS(Dataset):
                 vseg_info["vb_id_lst_new"] = vid_seg_ann_lst
                 vsitu_vinfo_dct[vseg] = vseg_info
             self.vsitu_vinfo_dct = vsitu_vinfo_dct
+            ### REMOVE Unavailable data
+            self.vsitu_vinfo_dct = {k:v for k,v in self.vsitu_vinfo_dct.items() if k in available_seg}
 
     def __len__(self) -> int:
         if self.full_cfg.debug_mode:

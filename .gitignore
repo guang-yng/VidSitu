@@ -10,3 +10,5 @@ SlowFast/*
 cocoapi/*
 coval/*
 fairseq/*
+
+.vscode/
