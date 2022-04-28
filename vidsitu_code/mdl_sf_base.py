@@ -13,7 +13,7 @@ from fairseq.models.transformer import (
 from utils.transformer_code import Transformer as TxCodeEnc
 
 from vidsitu_code.seq_gen import SeqGenCustom, EncoderOut
-from transformers import GPT2LMHeadModel
+from transformers import GPT2LMHeadModel, RobertaModel
 from vidsitu_code.hf_gpt2_fseq import HuggingFaceGPT2Decoder
 
 
@@ -190,9 +190,12 @@ class SFBase(nn.Module):
         # enc_out: List
         # len(enc_out) = nfeats_used
         # enc_out[0]: B x C x T x H x W
+        print(enc_out[0].shape, enc_out[1].shape)
         head_out = self.head(enc_out)
+        print(head_out.shape)
         # (B, C, T, H, W) -> (B, T, H, W, C).
         head_out = head_out.permute((0, 2, 3, 4, 1))
+        print(head_out.shape)
 
         # B = len(inp["vseg_idx"])
         # assert head_out.size(1) == 1
@@ -205,6 +208,7 @@ class SFBase(nn.Module):
         # pdb.set_trace()
 
         proj_out = self.proj_head(head_out)
+        print(proj_out.shape)
         B = len(inp["vseg_idx"])
         out = proj_out.view(B, 5, -1)
         assert out.size(-1) == len(self.comm.vb_id_vocab)
@@ -214,6 +218,58 @@ class SFBase(nn.Module):
         feat_out = self.forward_encoder(inp)
         mdl_out = self.forward_decoder(feat_out, inp)
         return {"mdl_out": mdl_out}
+
+
+class SFFBase(SFBase):
+    def __init__(self, cfg, comm):
+        super(SFFBase, self).__init__(cfg, comm)
+
+    def build_projection_head(self, cfg, out_dim=None):
+        if out_dim is None:
+            out_dim = len(self.comm.vb_id_vocab)
+        din = sum(self.head.dim_in)
+        self.proj_head_1 = nn.Sequential(*[nn.Linear(din, 768), nn.ReLU()])
+        self.proj_head_2 = nn.Linear(768, out_dim)
+
+    def forward(self, inp: Dict):
+
+        enc_out = self.forward_encoder(inp)
+        # feat_out = [combine_first_ax(feat) for feat in feat_out]
+        head_out = self.head(enc_out)
+        head_out = head_out.permute((0, 2, 3, 4, 1))
+        feat_out = self.proj_head_1(head_out)
+        proj_out = self.proj_head_2(feat_out)
+        B = len(inp["vseg_idx"])
+        out = proj_out.view(B, 5, -1)
+        assert out.size(-1) == len(self.comm.vb_id_vocab)
+
+        return {"mdl_out": out, "feat_out": feat_out.view(B*5, -1)}
+
+
+class EventModel(SFBase):
+    def __init__(self, cfg, comm):
+        super(EventModel, self).__init__(cfg, comm)
+
+    def build_projection_head(self, cfg, out_dim=None):
+        if out_dim is None:
+            out_dim = len(self.comm.vb_id_vocab)
+        din = sum(self.head.dim_in)
+        self.proj_head_1 = nn.Sequential(*[nn.Linear(din, 768), nn.ReLU()])
+        self.proj_head_2 = nn.Linear(768, out_dim)
+
+    def forward(self, inp: Dict):
+
+        enc_out = self.forward_encoder(inp)
+        # feat_out = [combine_first_ax(feat) for feat in feat_out]
+        head_out = self.head(enc_out)
+        head_out = head_out.permute((0, 2, 3, 4, 1))
+        feat_out = self.proj_head_1(head_out)
+        proj_out = self.proj_head_2(feat_out)
+        B = len(inp["vseg_idx"])
+        out = proj_out.view(B, 5, -1)
+        assert out.size(-1) == len(self.comm.vb_id_vocab)
+
+        return {"mdl_out": out, "feat_out": feat_out.view(B*5, -1)}
 
 
 class LossB(nn.Module):
@@ -229,6 +285,21 @@ class LossB(nn.Module):
         mdl_preds_c1 = combine_first_ax(mdl_preds)
         loss = F.cross_entropy(mdl_preds_c1, labels_c1)
         return {"loss": loss}
+
+
+class LossContrastive(nn.Module):
+    def __init__(self, cfg, comm):
+        super().__init__()
+        self.loss_verb = LossB(cfg, comm)
+        self.c = nn.CrossEntropyLoss()
+        self.loss_keys = ["loss"]
+
+    def forward(self, mdl_out, inp):
+        loss_v = self.loss_verb(mdl_out, inp)['loss']
+        logits = mdl_out['feat_out'] @ inp['pooled_feature'].view(-1, 768).T
+        labels = torch.arange(len(mdl_out['feat_out']), device='cuda')
+        loss_c = 0.5*(self.c(logits, labels) + self.c(logits.T, labels))
+        return {"loss": loss_v + loss_c}
 
 
 class LossLambda(nn.Module):

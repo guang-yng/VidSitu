@@ -1,3 +1,4 @@
+from lib2to3.pgen2 import token
 from pathlib import Path
 import torch
 from torch.utils.data import Dataset
@@ -18,7 +19,8 @@ from utils.dat_utils import (
     pad_tokens,
     read_file_with_assertion,
 )
-from transformers import GPT2TokenizerFast, RobertaTokenizerFast
+from transformers import GPT2TokenizerFast, RobertaTokenizerFast, RobertaModel
+from tqdm import tqdm
 import os
 
 
@@ -83,6 +85,9 @@ class VsituDS(Dataset):
             self.cfg.vocab_files.verb_id_vocab, reader="pickle"
         )
         self.comm.rob_hf_tok = RobertaTokenizerFast.from_pretrained(
+            self.full_cfg.mdl.rob_mdl_name
+        )
+        self.comm.rob_hf_tok_pad = RobertaTokenizerFast.from_pretrained(
             self.full_cfg.mdl.rob_mdl_name
         )
         self.comm.gpt2_hf_tok = read_file_with_assertion(
@@ -179,6 +184,91 @@ class VsituDS(Dataset):
             self.vsitu_vinfo_dct = vsitu_vinfo_dct
             ### REMOVE Unavailable data
             self.vsitu_vinfo_dct = {k:v for k,v in self.vsitu_vinfo_dct.items() if k in available_seg}
+
+        self.read_text_features()
+
+    def read_text_features(self):
+        available_seg = os.listdir(self.vsitu_frm_dir)
+        voc_to_use = self.comm.vb_id_vocab
+        tokenizer = self.comm.rob_hf_tok
+        tokenizer_pad = self.comm.rob_hf_tok_pad
+        rb_mdl = RobertaModel.from_pretrained(self.full_cfg.mdl.rob_mdl_name)
+        rb_mdl.to('cuda')
+        rb_mdl.eval()
+        print("Start Text Feature Processing ...")
+        for vseg_id in tqdm(available_seg):
+            file_name = self.vsitu_frm_dir / vseg_id / 'text_features.pt'
+            if os.path.exists(file_name):
+                continue
+
+            if vseg_id not in self.vsitu_ann_dct:
+                continue
+
+            ann_ = self.vsitu_ann_dct[vseg_id]
+
+
+            sent_list = []
+            text_arg_index = []
+            # Add Argument Info
+            for ev in range(1, 6):
+                if len(ann_) > 1:
+                    label_lst_one_ev = []
+                    label_to_id = {}
+                    for vseg_aix, vid_seg_ann in enumerate(ann_):
+                        if vseg_aix == 10:
+                            break
+                        vb_id = vid_seg_ann[f"Ev{ev}"]["VerbID"]
+
+                        if vb_id in voc_to_use.indices:
+                            label = voc_to_use.indices[vb_id]
+                        else:
+                            label = voc_to_use.unk_index
+                        label_lst_one_ev.append(label)
+                        label_to_id[label] = vseg_aix
+                    mc = Counter(label_lst_one_ev).most_common(1)
+                    vid_seg_ann = ann_[label_to_id[mc[0][0]]]
+                else:
+                    vid_seg_ann = ann_[0]
+
+                vb = vid_seg_ann[f"Ev{ev}"]["Verb"]
+                arg_list = vid_seg_ann[f"Ev{ev}"]["Arg_List"]
+                args = vid_seg_ann[f"Ev{ev}"]["Args"]
+                pos_arg_pair = [(arg_list[k], v) for k, v in args.items()]
+                pos_arg_pair.append(('0.5', vb))
+                arg_index = []
+                sent_text = ""
+                L = 0
+                for id, v in sorted(pos_arg_pair):
+                    txt = v.capitalize() if id == '0' else f' {v}'
+                    l = len(tokenizer.tokenize(txt))
+                    if L+l > 512:
+                        print(id, vseg_id)
+                        print(vid_seg_ann)
+                        exit(0)
+                    arg_index.append(torch.zeros(1, 512, dtype=bool).index_fill_(1, torch.arange(L+1, L+l+1), 1))
+                    sent_text += txt
+                    L += l
+
+                rem = 8-len(pos_arg_pair)
+                assert rem >= 0
+                arg_index.append(torch.zeros(rem, 512, dtype=bool))
+                sent_text += '.'
+
+                sent_list.append(sent_text)
+                text_arg_index.append(torch.cat(arg_index))
+
+            tokenized = tokenizer_pad(sent_list, padding='max_length', return_tensors='pt')
+            tokenized = {k:v.to('cuda') for k, v in tokenized.items()}
+            text_feat = rb_mdl(**tokenized)
+            text_features = {
+                "text_feature": text_feat[0].detach(),
+                "pooled_feature": text_feat[1].detach(),
+                "text_arg_index": torch.stack(text_arg_index),
+                }
+            torch.save(text_features, file_name)
+            del tokenized
+        del rb_mdl
+        print("Text Feature Processing Done!")
 
     def __len__(self) -> int:
         if self.full_cfg.debug_mode:
@@ -531,6 +621,14 @@ class VsituDS(Dataset):
         else:
             raise NotImplementedError
 
+        file_name = self.vsitu_frm_dir / vid_seg_name / "text_features.pt"
+        if os.path.exists(file_name):
+            feature_dict = torch.load(file_name, map_location=torch.device('cpu'))
+            label_out_dct.update(feature_dict)
+        else:
+            label_out_dct['text_feature'] = torch.tensor()
+            label_out_dct['pooled_feature'] = torch.tensor()
+        
         return label_out_dct
 
     def vb_only_item_getter(self, idx: int):
