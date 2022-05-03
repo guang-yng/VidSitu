@@ -1,1 +1,1 @@
-CUDA_VISIBLE_DEVICES=6 python main_dist.py "vb" --mdl.mdl_name="sf_base" --train.bs=4 
+CUDA_VISIBLE_DEVICES=6,7 python main_dist.py "vb" --mdl.mdl_name="sf_base" --train.bs=8 --debug_mode=False

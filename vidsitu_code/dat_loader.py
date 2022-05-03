@@ -5,7 +5,7 @@ from torch.utils.data import Dataset
 from yacs.config import CfgNode as CN
 from typing import List, Dict
 from munch import Munch
-from PIL import Image
+from PIL import Image, ImageDraw
 import numpy as np
 from collections import Counter
 from utils.video_utils import get_sequence, pack_pathway_output, tensor_normalize
@@ -145,6 +145,7 @@ class VsituDS(Dataset):
 
     def read_files(self, split_type: str):
         self.vsitu_frm_dir = Path(self.cfg.video_frms_tdir)
+        self.vsitu_obj_dir = Path(self.cfg.object_dir)
         split_files_cfg = self.cfg.split_files_lb
         vsitu_ann_files_cfg = self.cfg.vsitu_ann_files_lb
         vinfo_files_cfg = self.cfg.vinfo_files_lb
@@ -161,7 +162,7 @@ class VsituDS(Dataset):
         self.vsitu_ann_dct = vsitu_ann_dct
 
         ### REMOVE Unavailable data
-        available_seg = set(os.listdir(self.vsitu_frm_dir))
+        available_seg = set(os.listdir(self.vsitu_frm_dir)).intersection(set(os.listdir(self.vsitu_obj_dir)))
         self.vseg_lst = [x for x in self.vseg_lst if x in available_seg]
         self.vsitu_ann_dct = {k: v for k,v in self.vsitu_ann_dct.items() if k in available_seg}
 
@@ -206,7 +207,6 @@ class VsituDS(Dataset):
 
             ann_ = self.vsitu_ann_dct[vseg_id]
 
-
             sent_list = []
             text_arg_index = []
             # Add Argument Info
@@ -245,26 +245,37 @@ class VsituDS(Dataset):
                         print(id, vseg_id)
                         print(vid_seg_ann)
                         exit(0)
-                    arg_index.append(torch.zeros(1, 512, dtype=bool).index_fill_(1, torch.arange(L+1, L+l+1), 1))
+                    arg_index.append((L+1, L+l+1))
                     sent_text += txt
                     L += l
 
-                rem = 8-len(pos_arg_pair)
-                assert rem >= 0
-                arg_index.append(torch.zeros(rem, 512, dtype=bool))
                 sent_text += '.'
 
                 sent_list.append(sent_text)
-                text_arg_index.append(torch.cat(arg_index))
+                text_arg_index.append(arg_index)
 
             tokenized = tokenizer_pad(sent_list, padding='max_length', return_tensors='pt')
             tokenized = {k:v.to('cuda') for k, v in tokenized.items()}
             text_feat = rb_mdl(**tokenized)
+            text_feat0 = text_feat[0].detach()
+            text_feature = []
+            for ev, feat in enumerate(text_feat0):
+                arg_feat = []
+                for arg_id in range(min(len(text_arg_index[ev]), 5)):
+                    if arg_id == 1:
+                        continue
+                    arg_range = text_arg_index[ev][arg_id]
+                    u = feat[arg_range[0]:arg_range[1], ]
+                    arg_feat.append(u.mean(dim=0, keepdim=True))
+                rem = 4 - len(arg_feat)
+                assert rem >= 0
+                arg_feat.append(torch.zeros((rem, 768), device='cuda'))
+                text_feature.append(torch.cat(arg_feat))
+
             text_features = {
-                "text_feature": text_feat[0].detach(),
+                "text_feature": torch.stack(text_feature),
                 "pooled_feature": text_feat[1].detach(),
-                "text_arg_index": torch.stack(text_arg_index),
-                }
+            }
             torch.save(text_features, file_name)
             del tokenized
         del rb_mdl
@@ -283,6 +294,26 @@ class VsituDS(Dataset):
         Output should be H x W x C
         """
         img = Image.open(img_fpath).convert("RGB")
+        img = img.resize((224, 224))
+        img_np = np.array(img)
+
+        return img_np
+
+    def read_obj_img(self, img_info, obj_dict):
+        """
+        Output should be H x W x C
+        """
+        img_fpath, img_id = img_info
+        img = Image.open(img_fpath).convert("RGB")
+        black_mask = Image.new("RGB", img.size)
+        rect_mask = Image.new("L", black_mask.size, 255)
+        if str(img_id) in obj_dict:
+            box = obj_dict[str(img_id)]['box']
+            draw = ImageDraw.Draw(rect_mask)
+            draw.rectangle(box.tolist(), fill=0)
+
+        img.paste(black_mask, (0, 0), rect_mask)
+
         img = img.resize((224, 224))
         img_np = np.array(img)
 
@@ -549,6 +580,84 @@ class VsituDS(Dataset):
             ).long()
         return out_dct
 
+    def get_obj_frms_all(self, idx):
+        vid_seg_name = self.vseg_lst[idx]
+        frm_pth_lst = [
+            self.vsitu_frm_dir / f"{vid_seg_name}/{vid_seg_name}_{ix:06d}.jpg"
+            for ix in range(1, 301)
+        ]
+
+        # Read Tracker Info
+        obj_dict = np.load(self.vsitu_obj_dir / f"{vid_seg_name}"/"obj_track.npy", allow_pickle=True).item()
+        assert len(obj_dict) > 0, f"No object in {vid_seg_name}."
+
+        frms_ev_fast_tensor = []
+        frms_ev_slow_tensor = []
+        for ev in range(1, 6):
+            ev_id = f"Ev{ev}"
+            frms_by_ev_fast = []
+            frms_by_ev_slow = []
+            center_ix = self.comm.cent_frm_per_ev[ev_id]
+            frms_ixs_for_ev = get_sequence(
+                center_idx=center_ix,
+                half_len=self.comm.frm_seq_len // 2,
+                sample_rate=self.comm.sampling_rate,
+                max_num_frames=300,
+            )
+            confidence_list = []
+            for k in obj_dict:
+                confidence = []
+                for f in frms_ixs_for_ev:
+                    if f not in obj_dict[k]:
+                        confidence.append(0)
+                    else:
+                        confidence.append(obj_dict[k][str(f)]['confidence'])
+                confidence_list.append((sum(confidence)/len(frms_ixs_for_ev), k))
+
+            for _, k in sorted(confidence_list, reverse=True)[:4]:
+                frm_pths_for_ev = [(frm_pth_lst[ix], ix) for ix in frms_ixs_for_ev]
+
+                frms_for_ev = torch.from_numpy(
+                    np.stack([self.read_obj_img(f, obj_dict[k]) for f in frm_pths_for_ev])
+                )
+
+                frms_for_ev = tensor_normalize(
+                    frms_for_ev, self.sf_cfg.DATA.MEAN, self.sf_cfg.DATA.STD
+                )
+
+                # T x H x W x C => C x T x H x W
+                frms_for_ev_t = (frms_for_ev).permute(3, 0, 1, 2)
+                frms_for_ev_slow_fast = pack_pathway_output(self.sf_cfg, frms_for_ev_t)
+                if len(frms_for_ev_slow_fast) == 1:
+                    frms_by_ev_fast.append(frms_for_ev_slow_fast[0])
+                elif len(frms_for_ev_slow_fast) == 2:
+                    frms_by_ev_slow.append(frms_for_ev_slow_fast[0])
+                    frms_by_ev_fast.append(frms_for_ev_slow_fast[1])
+                else:
+                    raise NotImplementedError
+
+            # 4 x C x T x H x W
+            frms_all_ev_fast = np.stack(frms_by_ev_fast)
+            if len(frms_by_ev_fast) < 4:
+                rem = 4-len(frms_by_ev_fast)
+                frms_all_ev_fast = np.concatenate((frms_all_ev_fast, 
+                    np.zeros((rem, *frms_by_ev_fast[0].shape))))
+            frms_ev_fast_tensor.append(torch.from_numpy(frms_all_ev_fast).float().unsqueeze_(0))
+            if len(frms_by_ev_slow) > 0:
+                frms_all_ev_slow = np.stack(frms_by_ev_slow)
+                if len(frms_by_ev_slow) < 4:
+                    rem = 4-len(frms_by_ev_slow)
+                    frms_all_ev_slow = np.concatenate((frms_all_ev_slow, 
+                        np.zeros((rem, *frms_by_ev_slow[0].shape))))
+                frms_ev_slow_tensor.append(torch.from_numpy(frms_all_ev_slow).float().unsqueeze_(0))
+
+        # 5 x 4 x C x T x H x W
+        out_dct = {"obj_frms_ev_fast_tensor": torch.cat(frms_ev_fast_tensor)}
+        if len(frms_ev_slow_tensor) > 0:
+            out_dct["obj_frms_ev_slow_tensor"] = torch.cat(frms_ev_slow_tensor)
+
+        return out_dct
+
     def get_frms_all(self, idx):
         vid_seg_name = self.vseg_lst[idx]
         frm_pth_lst = [
@@ -633,6 +742,7 @@ class VsituDS(Dataset):
 
     def vb_only_item_getter(self, idx: int):
         frms_out_dct = self.get_frms_all(idx)
+        # obj_frms_out_dct = self.get_obj_frms_all(idx)
 
         frms_out_dct["vseg_idx"] = torch.tensor(idx)
         label_out_dct = self.get_label_out_dct(idx)

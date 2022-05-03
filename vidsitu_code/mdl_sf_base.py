@@ -190,12 +190,9 @@ class SFBase(nn.Module):
         # enc_out: List
         # len(enc_out) = nfeats_used
         # enc_out[0]: B x C x T x H x W
-        print(enc_out[0].shape, enc_out[1].shape)
         head_out = self.head(enc_out)
-        print(head_out.shape)
         # (B, C, T, H, W) -> (B, T, H, W, C).
         head_out = head_out.permute((0, 2, 3, 4, 1))
-        print(head_out.shape)
 
         # B = len(inp["vseg_idx"])
         # assert head_out.size(1) == 1
@@ -208,7 +205,6 @@ class SFBase(nn.Module):
         # pdb.set_trace()
 
         proj_out = self.proj_head(head_out)
-        print(proj_out.shape)
         B = len(inp["vseg_idx"])
         out = proj_out.view(B, 5, -1)
         assert out.size(-1) == len(self.comm.vb_id_vocab)
@@ -228,8 +224,8 @@ class SFFBase(SFBase):
         if out_dim is None:
             out_dim = len(self.comm.vb_id_vocab)
         din = sum(self.head.dim_in)
-        self.proj_head_1 = nn.Sequential(*[nn.Linear(din, 768), nn.ReLU()])
-        self.proj_head_2 = nn.Linear(768, out_dim)
+        self.proj_head_1 = nn.Linear(din, 768)
+        self.proj_head_2 = nn.Sequential(nn.Linear(768, din//2), nn.ReLU(), nn.Linear(din//2, out_dim))
 
     def forward(self, inp: Dict):
 
@@ -254,22 +250,48 @@ class EventModel(SFBase):
         if out_dim is None:
             out_dim = len(self.comm.vb_id_vocab)
         din = sum(self.head.dim_in)
-        self.proj_head_1 = nn.Sequential(*[nn.Linear(din, 768), nn.ReLU()])
-        self.proj_head_2 = nn.Linear(768, out_dim)
+        self.proj_head_1 = nn.Linear(din, 768)
+        self.proj_head_2 = nn.Sequential(nn.Linear(768, din//2), nn.ReLU(), nn.Linear(din//2, out_dim))
+
+    def get_feats(self, inp):
+        # B x 5 x 1 x C x T x W x H + B x 5 x 4 x C x T x W x H -> (25B) x C x T x W x H
+        if self.comm.path_type == "multi":
+            slow_tensor = torch.cat([inp["frms_ev_slow_tensor"].unsqueeze(2),
+                inp["obj_frms_ev_slow_tensor"]], dim=2)
+            fast_tensor = torch.cat([inp["frms_ev_fast_tensor"].unsqueeze(2),
+                inp["obj_frms_ev_fast_tensor"]], dim=2)
+            feat_slow = combine_first_ax(combine_first_ax(slow_tensor))
+            feat_fast = combine_first_ax(combine_first_ax(fast_tensor))
+            feats_used = [feat_slow, feat_fast]
+        elif self.comm.path_type == "single":
+            fast_tensor = torch.cat([inp["frms_ev_fast_tensor"].unsqueeze(2),
+                inp["obj_frms_ev_fast_tensor"]], dim=2)
+            feat_fast = combine_first_ax(combine_first_ax(fast_tensor))
+            feats_used = [feat_fast]
+        else:
+            raise NotImplementedError
+
+        return feats_used
 
     def forward(self, inp: Dict):
 
+        # enc_out: List
+        # len(enc_out) = nfeats_used
+        # enc_out[0]: 25B x C x T x H x W
         enc_out = self.forward_encoder(inp)
-        # feat_out = [combine_first_ax(feat) for feat in feat_out]
+
         head_out = self.head(enc_out)
         head_out = head_out.permute((0, 2, 3, 4, 1))
         feat_out = self.proj_head_1(head_out)
-        proj_out = self.proj_head_2(feat_out)
         B = len(inp["vseg_idx"])
+        # feat_out: 25B x 768
+        feat_out = feat_out.view(5*B, 5, -1)
+        proj_out = self.proj_head_2(feat_out.sum(dim=1))
+        # proj_out: 5B x vocab_size
         out = proj_out.view(B, 5, -1)
         assert out.size(-1) == len(self.comm.vb_id_vocab)
 
-        return {"mdl_out": out, "feat_out": feat_out.view(B*5, -1)}
+        return {"mdl_out": out, "feat_out": feat_out[:, 1:]}
 
 
 class LossB(nn.Module):
@@ -299,7 +321,39 @@ class LossContrastive(nn.Module):
         logits = mdl_out['feat_out'] @ inp['pooled_feature'].view(-1, 768).T
         labels = torch.arange(len(mdl_out['feat_out']), device='cuda')
         loss_c = 0.5*(self.c(logits, labels) + self.c(logits.T, labels))
-        return {"loss": loss_v + loss_c}
+        return {"loss": 0.5*(loss_v + loss_c)}
+
+
+class LossEC_WPG(nn.Module):
+    def __init__(self, cfg, comm):
+        super().__init__()
+        self.loss_verb = LossB(cfg, comm)
+        self.c = nn.CrossEntropyLoss()
+        self.loss_keys = ["loss"]
+
+    def forward(self, mdl_out, inp):
+        loss_v = self.loss_verb(mdl_out, inp)['loss']
+
+        # mdl_out['feat_out']: 5B x 4 x 768
+        # inp['text_feature']: B x 5 x 4 x 768
+        B5 = len(mdl_out['feat_out'])
+        print(inp['text_feature'].shape)
+        print(mdl_out['feat_out'].shape)
+        obj_feature = mdl_out['feat_out'].reshape(-1, 768)
+        arg_feature = inp['text_feature'].view(-1, 768)
+        # obj_feature: 20B x 768
+        # arg_feature: 20B x 768
+        logits = obj_feature @ arg_feature.T
+        logits = logits.view(B5, 4, B5, 4)
+        # find most matched texts for objects
+        max_values, max_indices = logits.max(dim=3)
+
+        max_values = max_values.permute((1, 0, 2))
+        labels = torch.cat([torch.arange(B5, device='cuda') for _ in range(4)])
+        loss_wpg = 0.5 * (self.c(max_values.reshape(-1, B5), labels)+ 
+            self.c(max_values.permute((0, 2, 1)).reshape(-1, B5), labels))
+
+        return {"loss": 0.5*(loss_wpg+loss_v)}
 
 
 class LossLambda(nn.Module):

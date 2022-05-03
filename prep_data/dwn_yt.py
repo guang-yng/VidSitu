@@ -153,9 +153,13 @@ class YTDown:
                 if format is None:
                     format = "22/best"
                 cmd = (
-                    f"ffmpeg -ss {yt_id['start']} -i $(yt-dlp {ytdl_cookies_str} -f {format}"
-                    + f" --get-url https://www.youtube.com/watch\?v\={yt_id['vid_id']}) -to 10 {out_file}"
+                    f"bash transfer.sh {yt_id['vid_id']} {out_file} {yt_id['start']}"
                 )
+                # cmd = (
+                #     f"ffmpeg -ss {yt_id['start']} -i $(yt-dlp {ytdl_cookies_str} -f {format}"
+                #     + f" --get-url https://www.youtube.com/watch\?v\={yt_id['vid_id']}) -to 10 {out_file}"
+                # )
+                print(cmd)
                 yield {"cmd": cmd}
 
         retry_count = self.cfg.retry_count

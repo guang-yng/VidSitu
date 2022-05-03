@@ -216,7 +216,8 @@ class EvlFn_EvRel:
         if self.cfg.debug_mode:
             pass
         else:
-            assert len(hypo_dct) == len(self.vseg_lst), "Missing Elements in Prediction"
+            print(f"[Warning] Only {len(hypo_dct)} predictions.")
+            # assert len(hypo_dct) == len(self.vseg_lst), "Missing Elements in Prediction"
 
         for ann_idx in hypo_dct:
             if ann_idx not in hypos:
@@ -346,7 +347,8 @@ class EvlFn_Vb:
         if self.cfg.debug_mode:
             pass
         else:
-            assert len(hypo_dct) == len(self.vseg_lst), "Missing Elements in Prediction"
+            print(f"[Warning] Only {len(hypo_dct)} predictions.")
+            # assert len(hypo_dct) == len(self.vseg_lst), "Missing Elements in Prediction"
         # for pix, pred_one in enumerate(pred_data):
         for ann_idx in hypo_dct:
             if ann_idx not in hypos:

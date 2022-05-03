@@ -1,5 +1,6 @@
 temp_dir/
 tmp/
+tmp_data/
 *__pycache__/
 data/*
 !data/*.md
@@ -10,5 +11,6 @@ SlowFast/*
 cocoapi/*
 coval/*
 fairseq/*
+TimeSformer/*
 
 .vscode/
