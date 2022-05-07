@@ -424,7 +424,7 @@ class EvalFnCap:
         Scorer_ = namedtuple("Scorer_", ["cls_fn", "to_init", "out_str"])
         self.scorer_dict = {
             "bleu": Scorer_(
-                Bleu(4, verbose=0), False, ["bleu_1", "bleu_2", "bleu_3", "bleu_4"]
+                Bleu(4), False, ["bleu_1", "bleu_2", "bleu_3", "bleu_4"]
             ),
             "meteor": Scorer_(Meteor(), False, ["meteor"]),
             "cider": Scorer_(Cider("corpus"), False, ["cider"]),
@@ -719,7 +719,7 @@ def main(
     **kwargs,
 ):
 
-    cfg = CN(yaml.safe_load(open("./eval_files/vsitu_cfg.yml")))
+    cfg = CN(yaml.safe_load(open("./configs/vsitu_cfg.yml")))
 
     assert "valid" in split_type or "test" in split_type
 

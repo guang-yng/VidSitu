@@ -114,6 +114,13 @@ class ResNetBasicHead_Trimmed(nn.Module):
 
 
 class SFBase(nn.Module):
+    """
+        Input: 
+            slow: B x Ev(5) x C(3) x T(8) x 244 x 244
+            fast: B x Ev(5) x C(3) x T(32) x 244 x 244
+        Output:
+            mdl_out: B x Ev(5) x vocab_size
+    """
     def __init__(self, cfg, comm):
         super(SFBase, self).__init__()
         self.full_cfg = cfg

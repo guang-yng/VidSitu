@@ -153,7 +153,7 @@ class YTDown:
                 if format is None:
                     format = "22/best"
                 cmd = (
-                    f"bash transfer.sh {yt_id['vid_id']} {out_file} {yt_id['start']}"
+                    f"bash transfer.sh {yt_id['vid_id']} {out_file} {yt_id['start']} {yt_id['vid_seg_id']}"
                 )
                 # cmd = (
                 #     f"ffmpeg -ss {yt_id['start']} -i $(yt-dlp {ytdl_cookies_str} -f {format}"
@@ -331,4 +331,5 @@ if __name__ == "__main__":
     )
 
     args_inp = parser.parse_args()
+    print("Hi")
     main(**vars(args_inp))

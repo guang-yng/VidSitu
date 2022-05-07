@@ -1,5 +1,6 @@
 temp_dir/
 tmp/
+tmp
 tmp_data/
 *__pycache__/
 data/*
@@ -9,8 +10,14 @@ mlruns/
 
 SlowFast/*
 cocoapi/*
+coco-caption/
+coco-caption/*
 coval/*
 fairseq/*
 TimeSformer/*
+
+weights/*
+weights
+results/*
 
 .vscode/
