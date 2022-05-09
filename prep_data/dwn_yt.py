@@ -95,12 +95,12 @@ class YTDown:
         split_dir = Path(split_dir)
         assert split_dir.exists()
         self.split_data = {
-            "train_split": read_file_with_assertion(
-                split_dir / "vseg_split_train_lb.json"
-            ),
-            "val_split": read_file_with_assertion(
-                split_dir / "vseg_split_valid_lb.json"
-            ),
+            # "train_split": read_file_with_assertion(
+            #     split_dir / "vseg_split_train_lb.json"
+            # ),
+            # "val_split": read_file_with_assertion(
+            #     split_dir / "vseg_split_valid_lb.json"
+            # ),
             "test_vb_split": read_file_with_assertion(
                 split_dir / "vseg_split_testvb_lb.json"
             ),

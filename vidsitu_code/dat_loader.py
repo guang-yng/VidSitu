@@ -80,6 +80,10 @@ class VsituDS(Dataset):
         self.comm.fps = fps
         self.comm.cent_frm_per_ev = cent_frm_per_ev
         self.comm.max_frms = 300
+        self.comm.need_objs = False
+        if self.full_cfg.task_type == "vb":
+            if self.full_cfg.mdl.mdl_name == "timesformer_event_contrastive":
+                self.comm.need_objs = True
 
         self.comm.vb_id_vocab = read_file_with_assertion(
             self.cfg.vocab_files.verb_id_vocab, reader="pickle"
@@ -162,7 +166,9 @@ class VsituDS(Dataset):
         self.vsitu_ann_dct = vsitu_ann_dct
 
         ### REMOVE Unavailable data
-        available_seg = set(os.listdir(self.vsitu_frm_dir)).intersection(set(os.listdir(self.vsitu_obj_dir)))
+        available_seg = set(os.listdir(self.vsitu_frm_dir))
+        if self.comm.need_objs:
+            available_seg = available_seg.intersection(set(os.listdir(self.vsitu_obj_dir)))
         self.vseg_lst = [x for x in self.vseg_lst if x in available_seg]
         self.vsitu_ann_dct = {k: v for k,v in self.vsitu_ann_dct.items() if k in available_seg}
 
@@ -742,7 +748,8 @@ class VsituDS(Dataset):
 
     def vb_only_item_getter(self, idx: int):
         frms_out_dct = self.get_frms_all(idx)
-        # obj_frms_out_dct = self.get_obj_frms_all(idx)
+        if self.comm.need_objs:
+            obj_frms_out_dct = self.get_obj_frms_all(idx)
 
         frms_out_dct["vseg_idx"] = torch.tensor(idx)
         label_out_dct = self.get_label_out_dct(idx)

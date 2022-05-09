@@ -1,8 +1,9 @@
 # SLOWFAST
-# CUDA_VISIBLE_DEVICES=6 python main_dist.py "vb" --mdl.mdl_name="sf_base" --train.bs=4 --debug_mode=False
+CUDA_VISIBLE_DEVICES=6,3 python main_dist.py "slowfast" --mdl.mdl_name="sf_base" \
+ --train.bs=8 --train.gradient_accumulation=2
 
 # SLOWFAST vb_arg
-CUDA_VISIBLE_DEVICES=2,3 python feat_extractor.py "tmp/models/vb.pth" "vb" --task_type="vb" --mdl.mdl_name="sf_base" --train.bs=8
+# CUDA_VISIBLE_DEVICES=2,3 python feat_extractor.py "tmp/models/vb.pth" "vb" --task_type="vb" --mdl.mdl_name="sf_base" --train.bs=8
 
 # SLOWFAST Pretrained
 # CUDA_VISIBLE_DEVICES=6,7 python main_dist.py "vb" --mdl.mdl_name="sf_base" --train.bs=8 --mdl.load_sf_pretrained=True --misc.tmp_path="./tmp-pretrained"
@@ -16,3 +17,16 @@ CUDA_VISIBLE_DEVICES=2,3 python feat_extractor.py "tmp/models/vb.pth" "vb" --tas
 #  --vinfo_file_path="./data/vidsitu_annotations/vinfo_files/vinfo_valid_lb.json" \
 #  --vsitu_ann_file_path="./data/vidsitu_annotations/vseg_ann_files/vsann_valid_lb.json" \
 #  --split_type='valid' --task_type="vb"
+
+# TimeSformer Pretrained
+# CUDA_VISIBLE_DEVICES=4,5,6,7 python main_dist.py "timesformer" --mdl.mdl_name="timesformer" \
+#     --train.bs=16 --train.gradient_accumulation=1
+
+# SLOWFAST Contrastive
+CUDA_VISIBLE_DEVICES=6,3 python main_dist.py "slowfast_contrastive" --mdl.mdl_name="sf_base_contrastive" \
+ --train.bs=8 --train.gradient_accumulation=2
+
+# SLOWFAST Pretrained Contrastive
+# CUDA_VISIBLE_DEVICES=6,7 python main_dist.py "slowfast_pretrained_contrastive" \
+#    --mdl.mdl_name="sf_base" --train.bs=8 --mdl.load_sf_pretrained=True  \
+#    --train.gradien_accumulation=2

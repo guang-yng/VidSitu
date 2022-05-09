@@ -16,6 +16,7 @@ from vidsitu_code.seq_gen import SeqGenCustom, EncoderOut
 from transformers import GPT2LMHeadModel, RobertaModel
 from vidsitu_code.hf_gpt2_fseq import HuggingFaceGPT2Decoder
 
+from timesformer.models.vit import TimeSformer
 
 class SlowFast_FeatModel(SlowFast):
     def forward_features(self, x):
@@ -221,6 +222,29 @@ class SFBase(nn.Module):
         feat_out = self.forward_encoder(inp)
         mdl_out = self.forward_decoder(feat_out, inp)
         return {"mdl_out": mdl_out}
+
+
+class TSformer(nn.Module):
+    def __init__(self, cfg, comm):
+        super(TSformer, self).__init__()
+        self.full_cfg = cfg
+        self.cfg = cfg.mdl
+        self.comm = comm
+        self.build_model()
+
+    def build_model(self):
+        model_path = self.cfg.ts_checkpoint_file
+        self.num_class = len(self.comm.vb_id_vocab)
+        self.model = TimeSformer(img_size=224, num_classes=self.num_class, 
+            num_frames=8, attention_type='divided_space_time', 
+            pretrained_model=model_path)
+        return
+
+    def forward(self, inp: Dict):
+        B = len(inp["vseg_idx"])
+        feat_fast = combine_first_ax(inp["frms_ev_slow_tensor"])
+        pred = self.model(feat_fast, )
+        return {"mdl_out": pred.view(B, 5, -1)}
 
 
 class SFFBase(SFBase):

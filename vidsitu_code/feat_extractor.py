@@ -48,6 +48,9 @@ class VsituDS_All(VsituDS):
         self.comm.vb_id_vocab = read_file_with_assertion(
             self.cfg.vocab_files.verb_id_vocab, reader="pickle"
         )
+        self.comm.need_objs = False
+        if self.full_cfg.mdl.mdl_name == "timesformer_event_contrastive":
+            self.comm.need_objs = True
 
         if self.sf_cfg.MODEL.ARCH in self.sf_cfg.MODEL.MULTI_PATHWAY_ARCH:
             self.comm.path_type = "multi"
@@ -64,7 +67,9 @@ class VsituDS_All(VsituDS):
         # Remove Unavailable
         print(f"Need {len(vseg_lst)} clips.")
         self.vsitu_obj_dir = Path(self.cfg.object_dir)
-        available_seg = set(os.listdir(self.cfg.video_frms_tdir)).intersection(set(os.listdir(self.vsitu_obj_dir)))
+        available_seg = set(os.listdir(self.cfg.video_frms_tdir))
+        if self.comm.need_objs:
+            available_seg = available_seg.intersection(set(os.listdir(self.vsitu_obj_dir)))
         self.vseg_lst = [x for x in self.vseg_lst if x in available_seg]
         print(f"{len(self.vseg_lst)} clips are available.")
 

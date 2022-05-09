@@ -342,6 +342,7 @@ class Learner:
             txt_log_file=self.txt_log_file,
         )
         self.prepare_log_file()
+        self.gradient_accumulation = self.cfg.train.gradient_accumulation
 
         # Set the number of iterations, epochs, best_met to 0.
         # Updated in loading if required
@@ -592,15 +593,18 @@ class Learner:
             # Increment number of iterations
             self.num_it += 1
             batch = move_to(batch, self.device)
-            self.optimizer.zero_grad()
+            if batch_id % self.gradient_accumulation == 0:
+                self.optimizer.zero_grad()
             out = self.mdl(batch)
             out_loss = self.loss_fn(out, batch)
             loss = out_loss[self.loss_keys[0]]
-            loss = loss.mean()
+            loss = loss.mean() / self.gradient_accumulation
             if torch.isnan(loss).any():
                 print("Pain In", batch["vseg_idx"])
             loss.backward()
-            self.optimizer.step()
+
+            if batch_id % self.gradient_accumulation == self.gradient_accumulation-1:
+                self.optimizer.step()
 
             # Returns original dictionary if not distributed parallel
             # loss_reduced = reduce_dict(out_loss, average=True)
