@@ -122,3 +122,4 @@ run_final_val: true
 overfit_batch: false
 DIST_BACKEND: "nccl"
 SHARD_ID: 0
+address: 9996

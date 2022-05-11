@@ -22,6 +22,7 @@ from utils.dat_utils import DataWrap
 from yacs.config import CfgNode as CN
 from vidsitu_code.extended_config import CfgProcessor
 from slowfast.utils.checkpoint import load_checkpoint
+import os
 
 
 def move_to(obj, device):
@@ -352,6 +353,12 @@ class Learner:
 
         # Resume if given a path
         if self.cfg.train["resume"]:
+            if self.cfg.train["resume_path"] == "":
+                model_list = os.listdir(self.model_epoch_dir)
+                if len(model_list) == 0:
+                    self.cfg.train["resume_path"] = str(self.model_file)
+                else:
+                    self.cfg.train["resume_path"] = str(self.model_epoch_dir / model_list[-1])
             self.load_model_dict(
                 resume_path=self.cfg.train["resume_path"],
                 load_opt=self.cfg.train["load_opt"],
@@ -795,7 +802,7 @@ class Learner:
         # Print logger at the start of the training loop
         self.logger.info(self.cfg)
         # Initialize the progress_bar
-        mb = master_bar(range(epochs))
+        mb = master_bar(range(self.num_epoch, epochs))
         # Initialize optimizer
         # Prepare Optimizer may need to be re-written as per use
         self.optimizer = self.prepare_optimizer(params_opt_dict)

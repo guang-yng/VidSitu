@@ -195,6 +195,8 @@ class VsituDS(Dataset):
         self.read_text_features()
 
     def read_text_features(self):
+        if os.path.exists(self.vsitu_frm_dir/'text_feature.done'):
+            return
         available_seg = os.listdir(self.vsitu_frm_dir)
         voc_to_use = self.comm.vb_id_vocab
         tokenizer = self.comm.rob_hf_tok

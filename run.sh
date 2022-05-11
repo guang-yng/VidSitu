@@ -1,6 +1,6 @@
 # SLOWFAST
-CUDA_VISIBLE_DEVICES=6,3 python main_dist.py "slowfast" --mdl.mdl_name="sf_base" \
- --train.bs=8 --train.gradient_accumulation=2
+# CUDA_VISIBLE_DEVICES=4,5 python main_dist.py "slowfast" --mdl.mdl_name="sf_base" \
+#  --train.bs=8 --address=9999 
 
 # SLOWFAST vb_arg
 # CUDA_VISIBLE_DEVICES=2,3 python feat_extractor.py "tmp/models/vb.pth" "vb" --task_type="vb" --mdl.mdl_name="sf_base" --train.bs=8

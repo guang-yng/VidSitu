@@ -16,6 +16,7 @@ from coval.eval.evaluator import Evaluator
 from pathlib import Path
 import json
 import sys
+import os
 
 sys.path.insert(0, "./coco-caption")
 
@@ -102,6 +103,11 @@ def read_gt_file(full_cfg, task_type, split_type):
             vsitu_ann_dct[vseg] = []
         vsitu_ann_dct[vseg].append(vseg_ann)
 
+    ### REMOVE Unavailable data
+    available_seg = set(os.listdir(ds_cfg.video_frms_tdir))
+    vseg_lst = [x for x in vseg_lst if x in available_seg]
+    vsitu_ann_dct = {k: v for k,v in vsitu_ann_dct.items() if k in available_seg}
+
     out_dct = {
         "vseg_lst": vseg_lst,
         "vsitu_ann_dct": vsitu_ann_dct,
@@ -118,6 +124,8 @@ def read_gt_file(full_cfg, task_type, split_type):
             vseg_info["vb_id_lst_eval"] = vid_seg_ann_lst
             vsitu_vinfo_dct[vseg] = vseg_info
 
+        ### REMOVE Unavailable data
+        vsitu_vinfo_dct = {k:v for k,v in vsitu_vinfo_dct.items() if k in available_seg}
         out_dct["vsitu_vinfo_dct"] = vsitu_vinfo_dct
     elif task_type == "vb_arg":
         pass
@@ -216,8 +224,8 @@ class EvlFn_EvRel:
         if self.cfg.debug_mode:
             pass
         else:
-            print(f"[Warning] Only {len(hypo_dct)} predictions.")
-            # assert len(hypo_dct) == len(self.vseg_lst), "Missing Elements in Prediction"
+            print(f"[Info] Got {len(hypo_dct)}/{len(self.vseg_lst)} predictions.")
+            assert len(hypo_dct) == len(self.vseg_lst), "Missing Elements in Prediction"
 
         for ann_idx in hypo_dct:
             if ann_idx not in hypos:
@@ -347,8 +355,8 @@ class EvlFn_Vb:
         if self.cfg.debug_mode:
             pass
         else:
-            print(f"[Warning] Only {len(hypo_dct)} predictions.")
-            # assert len(hypo_dct) == len(self.vseg_lst), "Missing Elements in Prediction"
+            print(f"[Info] Got {len(hypo_dct)}/{len(self.vseg_lst)} predictions.")
+            assert len(hypo_dct) == len(self.vseg_lst), "Missing Elements in Prediction"
         # for pix, pred_one in enumerate(pred_data):
         for ann_idx in hypo_dct:
             if ann_idx not in hypos:

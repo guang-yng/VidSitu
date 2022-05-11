@@ -157,7 +157,7 @@ def main_dist(uid: str, **kwargs):
     cfg = CFP.post_proc_config(cfg)
     cfg.freeze()
     print(cfg)
-    launch_job(cfg, init_method="tcp://localhost:9666", func=main_fn)
+    launch_job(cfg, init_method=f"tcp://localhost:{cfg.address}", func=main_fn)
 
     return
 
