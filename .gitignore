@@ -22,3 +22,5 @@ results/*
 
 .vscode/
 A100*
+
+run1.sh
