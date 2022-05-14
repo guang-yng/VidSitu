@@ -16,7 +16,9 @@ from vidsitu_code.seq_gen import SeqGenCustom, EncoderOut
 from transformers import GPT2LMHeadModel, RobertaModel
 from vidsitu_code.hf_gpt2_fseq import HuggingFaceGPT2Decoder
 
-from timesformer.models.vit import TimeSformer
+from functools import partial
+from timesformer.models.vit import TimeSformer, VisionTransformer, default_cfgs, _conv_filter
+from timesformer.models.helpers import load_pretrained
 
 class SlowFast_FeatModel(SlowFast):
     def forward_features(self, x):
@@ -271,6 +273,52 @@ class SFFBase(SFBase):
         assert out.size(-1) == len(self.comm.vb_id_vocab)
 
         return {"mdl_out": out, "feat_out": feat_out.view(B*5, -1)}
+
+
+class VisionTransformerF(VisionTransformer):
+    def forward(self, x):
+        x = self.forward_features(x)
+        return self.head(x), x
+
+
+class TimeSformerF(nn.Module):
+    def __init__(self, img_size=224, patch_size=16, num_classes=400, num_frames=8, attention_type='divided_space_time',  pretrained_model='', **kwargs):
+        super(TimeSformerF, self).__init__()
+        self.pretrained=True
+        self.model = VisionTransformerF(img_size=img_size, num_classes=num_classes, patch_size=patch_size, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), drop_rate=0., attn_drop_rate=0., drop_path_rate=0.1, num_frames=num_frames, attention_type=attention_type, **kwargs)
+
+        self.attention_type = attention_type
+        self.model.default_cfg = default_cfgs['vit_base_patch'+str(patch_size)+'_224']
+        self.num_patches = (img_size // patch_size) * (img_size // patch_size)
+        if self.pretrained:
+            load_pretrained(self.model, num_classes=self.model.num_classes, in_chans=kwargs.get('in_chans', 3), filter_fn=_conv_filter, img_size=img_size, num_frames=num_frames, num_patches=self.num_patches, attention_type=self.attention_type, pretrained_model=pretrained_model)
+
+    def forward(self, x):
+        x, feat = self.model(x)
+        return x, feat
+
+    
+class TSformerF(nn.Module):
+    def __init__(self, cfg, comm):
+        super(TSformerF, self).__init__()
+        self.full_cfg = cfg
+        self.cfg = cfg.mdl
+        self.comm = comm
+        self.build_model()
+
+    def build_model(self):
+        model_path = self.cfg.ts_checkpoint_file
+        self.num_class = len(self.comm.vb_id_vocab)
+        self.model = TimeSformerF(img_size=224, num_classes=self.num_class, 
+            num_frames=8, attention_type='divided_space_time', 
+            pretrained_model=model_path)
+        return
+
+    def forward(self, inp: Dict):
+        B = len(inp["vseg_idx"])
+        feat_fast = combine_first_ax(inp["frms_ev_slow_tensor"])
+        pred, feat = self.model(feat_fast, )
+        return {"mdl_out": pred.view(B, 5, -1), "feat_out": feat.view(B*5, -1)}
 
 
 class EventModel(SFBase):
