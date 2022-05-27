@@ -202,7 +202,7 @@ class VsituDS(Dataset):
         tokenizer = self.comm.rob_hf_tok
         tokenizer_pad = self.comm.rob_hf_tok_pad
         rb_mdl = RobertaModel.from_pretrained(self.full_cfg.mdl.rob_mdl_name)
-        rb_mdl.to('cuda')
+        rb_mdl = rb_mdl.to('cuda')
         rb_mdl.eval()
         print("Start Text Feature Processing ...")
         for vseg_id in tqdm(available_seg):
@@ -287,6 +287,7 @@ class VsituDS(Dataset):
             torch.save(text_features, file_name)
             del tokenized
         del rb_mdl
+        torch.cuda.empty_cache()
         print("Text Feature Processing Done!")
 
     def __len__(self) -> int:

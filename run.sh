@@ -19,12 +19,12 @@
 #  --split_type='valid' --task_type="vb"
 
 # TimeSformer Pretrained
-# CUDA_VISIBLE_DEVICES=4,5,6,7 python main_dist.py "timesformer" --mdl.mdl_name="timesformer" \
-#     --train.bs=16 --train.gradient_accumulation=1
+CUDA_VISIBLE_DEVICES=0,3 python main_dist.py "timesformer" --mdl.mdl_name="timesformer" \
+    --train.bs=2 --train.gradient_accumulation=4 --train.resume=True 
 
 # SLOWFAST Contrastive
-CUDA_VISIBLE_DEVICES=6,3 python main_dist.py "slowfast_contrastive" --mdl.mdl_name="sf_base_contrastive" \
- --train.bs=8 --train.gradient_accumulation=2
+# CUDA_VISIBLE_DEVICES=6,3 python main_dist.py "slowfast_contrastive" --mdl.mdl_name="sf_base_contrastive" \
+#  --train.bs=8 --train.gradient_accumulation=2
 
 # SLOWFAST Pretrained Contrastive
 # CUDA_VISIBLE_DEVICES=6,7 python main_dist.py "slowfast_pretrained_contrastive" \
