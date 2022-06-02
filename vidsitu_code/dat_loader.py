@@ -81,7 +81,10 @@ class VsituDS(Dataset):
         self.comm.cent_frm_per_ev = cent_frm_per_ev
         self.comm.max_frms = 300
         self.comm.need_objs = False
+        self.comm.need_text_feats = False
         if self.full_cfg.task_type == "vb":
+            if "contrastive" in self.full_cfg.mdl.mdl_name:
+                self.comm.need_text_feats = True
             if self.full_cfg.mdl.mdl_name == "timesformer_event_contrastive":
                 self.comm.need_objs = True
 
@@ -172,6 +175,8 @@ class VsituDS(Dataset):
         self.vseg_lst = [x for x in self.vseg_lst if x in available_seg]
         self.vsitu_ann_dct = {k: v for k,v in self.vsitu_ann_dct.items() if k in available_seg}
 
+        # if split_type == "train":
+        #     self.vseg_lst = self.vseg_lst[:128]
         if "valid" in split_type or "test" in split_type:
             vseg_info_lst = read_file_with_assertion(vinfo_files_cfg[split_type])
             vsitu_vinfo_dct = {}
@@ -192,7 +197,8 @@ class VsituDS(Dataset):
             ### REMOVE Unavailable data
             self.vsitu_vinfo_dct = {k:v for k,v in self.vsitu_vinfo_dct.items() if k in available_seg}
 
-        self.read_text_features()
+        if self.comm.need_text_feats:
+            self.read_text_features()
 
     def read_text_features(self):
         if os.path.exists(self.vsitu_frm_dir/'text_feature.done'):
@@ -739,13 +745,14 @@ class VsituDS(Dataset):
         else:
             raise NotImplementedError
 
-        file_name = self.vsitu_frm_dir / vid_seg_name / "text_features.pt"
-        if os.path.exists(file_name):
-            feature_dict = torch.load(file_name, map_location=torch.device('cpu'))
-            label_out_dct.update(feature_dict)
-        else:
-            label_out_dct['text_feature'] = torch.tensor()
-            label_out_dct['pooled_feature'] = torch.tensor()
+        if self.comm.need_text_feats:
+            file_name = self.vsitu_frm_dir / vid_seg_name / "text_features.pt"
+            if os.path.exists(file_name):
+                feature_dict = torch.load(file_name, map_location=torch.device('cpu'))
+                label_out_dct.update(feature_dict)
+            else:
+                label_out_dct['text_feature'] = torch.tensor()
+                label_out_dct['pooled_feature'] = torch.tensor()
         
         return label_out_dct
 

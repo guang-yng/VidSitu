@@ -96,8 +96,8 @@ def reduce_dict(input_dict, average=False):
         for k in sorted(input_dict.keys()):
             names.append(k)
             values.append(input_dict[k])
-            values = torch.stack(values, dim=0)
-            dist.reduce(values, dst=0)
+        values = torch.stack(values, dim=0)
+        dist.reduce(values, dst=0)
             # if dist.get_rank() == 0:
             # only main process gets accumulated, so only divide by
             # world_size in this case
@@ -509,8 +509,8 @@ class Learner:
         self.met_keys = self.eval_fn.met_keys
 
         # When writing Training and Validation together
-        self.trn_met = False
-        self.log_keys = ["epochs"] + _prepare_log_keys([self.loss_keys], ["trn"])
+        self.trn_met = True
+        self.log_keys = ["epochs"] + _prepare_log_keys([self.loss_keys, self.met_keys], ["trn"])
 
         self.val_log_keys = ["epochs"] + _prepare_log_keys(
             [self.loss_keys, self.met_keys], ["val"]
@@ -600,8 +600,6 @@ class Learner:
             # Increment number of iterations
             self.num_it += 1
             batch = move_to(batch, self.device)
-            if batch_id % self.gradient_accumulation == 0:
-                self.optimizer.zero_grad()
             out = self.mdl(batch)
             out_loss = self.loss_fn(out, batch)
             loss = out_loss[self.loss_keys[0]]
@@ -610,8 +608,9 @@ class Learner:
                 print("Pain In", batch["vseg_idx"])
             loss.backward()
 
-            if batch_id % self.gradient_accumulation == self.gradient_accumulation-1:
+            if self.num_it % self.gradient_accumulation == 0:
                 self.optimizer.step()
+                self.optimizer.zero_grad()
 
             # Returns original dictionary if not distributed parallel
             # loss_reduced = reduce_dict(out_loss, average=True)
@@ -620,7 +619,7 @@ class Learner:
 
             comment_to_print = f"LossB {loss: .4f} | SmLossB {trn_loss.smooth1: .4f}"
             if self.trn_met:
-                metric = self.eval_fn(out, batch)
+                metric = self.eval_fn.calc_acc(out, batch)
                 trn_acc.add_value(metric)
                 comment_to_print += f" | AccB {trn_acc.smooth1: .4f}"
             mb.child.comment = comment_to_print
@@ -820,6 +819,7 @@ class Learner:
             st_time = time.time()
         try:
             # Loop over epochs
+            self.optimizer.zero_grad()
             for epoch in mb:
                 self.num_epoch += 1
                 train_loss, train_acc = self.train_epoch(mb)
@@ -842,7 +842,7 @@ class Learner:
                 synchronize()
                 # Prepare what all to write
                 to_write = self.prepare_to_write(
-                    train_loss, None, valid_loss, valid_acc
+                    train_loss, train_acc, valid_loss, valid_acc
                 )
                 synchronize()
                 # Display on terminal

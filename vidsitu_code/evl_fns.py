@@ -224,7 +224,7 @@ class EvlFn_EvRel:
         if self.cfg.debug_mode:
             pass
         else:
-            print(f"[Info] Got {len(hypo_dct)}/{len(self.vseg_lst)} predictions.")
+            # print(f"[Info] Got {len(hypo_dct)}/{len(self.vseg_lst)} predictions.")
             assert len(hypo_dct) == len(self.vseg_lst), "Missing Elements in Prediction"
 
         for ann_idx in hypo_dct:
@@ -355,7 +355,7 @@ class EvlFn_Vb:
         if self.cfg.debug_mode:
             pass
         else:
-            print(f"[Info] Got {len(hypo_dct)}/{len(self.vseg_lst)} predictions.")
+            # print(f"[Info] Got {len(hypo_dct)}/{len(self.vseg_lst)} predictions.")
             assert len(hypo_dct) == len(self.vseg_lst), "Missing Elements in Prediction"
         # for pix, pred_one in enumerate(pred_data):
         for ann_idx in hypo_dct:
@@ -375,8 +375,10 @@ class EvlFn_Vb:
 
         return hypos, gts
 
-    def simple_acc(self, pred_file: str, split_type: str = "valid"):
+    def simple_acc(self, pred_file: str, split_type: str = "valid", dl=None):
         hypos, gts = self.prepare_hyp_gts(pred_file=pred_file, split_type=split_type)
+        if dl is not None:
+            assert dl.dataset.vseg_lst == self.vseg_lst
 
         out_dct = self.vb_classf_metrics_all(hyps=hypos, gts=gts)
         return out_dct

@@ -101,7 +101,7 @@ train:
   strict_load: true
   use_reduce_lr_plateau: false
   verbose: false
-  save_mdl_epochs: false
+  save_mdl_epochs: true
   sfbase_pret_path: ''
   freeze_sfbase: false
   gradient_accumulation: 1

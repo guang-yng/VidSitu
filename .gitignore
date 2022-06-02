@@ -1,6 +1,7 @@
 temp_dir/
 tmp/
 tmp
+tmp-backup
 tmp_data/
 *__pycache__/
 data/*
@@ -24,4 +25,6 @@ results/*
 A100*
 
 run1.sh
+run07.sh
+run11.sh
 run10.sh

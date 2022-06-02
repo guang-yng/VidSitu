@@ -16,6 +16,7 @@ from utils.trn_utils import (
 )
 from vidsitu_code.evl_fns import EvlFn_Vb, EvalFnCap, EvlFn_EvRel
 from vidsitu_code.seq_gen import SeqGenCustom
+from utils.misc_utils import combine_first_ax
 
 
 class EvalB(nn.Module):
@@ -36,6 +37,15 @@ class EvalB(nn.Module):
 
         return
 
+    def calc_acc(self, out, inp):
+        labels_c1 = combine_first_ax(inp["label_tensor"])
+        logits = combine_first_ax(out['mdl_out'])
+        preds = logits.argmax(dim=-1)
+        return {
+            "Per_Ev_Top_1": (preds == labels_c1).sum()/len(preds),
+            "Per_Ev_Top_5": torch.tensor(0, device=preds.device), "recall_macro_1_th_9": torch.tensor(0, device=preds.device)
+        }
+
     def forward_one_batch(self, mdl, inp):
         mdl_out = mdl(inp)["mdl_out"]
         mdl_out_probs = F.softmax(mdl_out, dim=-1)
@@ -52,13 +62,15 @@ class EvalB(nn.Module):
             # assert len(tgt_vbs10) == 5
 
             # iterate over Ev1-5
-            for pvb, pvs in zip(pred_vbs, pred_scores):
+            for pvb in pred_vbs:
                 pvb_used = pvb[:topk_save]
                 pvb_str = [self.comm.vb_id_vocab.symbols[pv] for pv in pvb_used]
                 pred_vbs_out.append(pvb_str)
 
-                pvb_score = pvs[:topk_save]
-                pred_scores_out.append(pvb_score)
+                # pvb_score = pvs[:topk_save]
+                # pred_scores_out.append(pvb_score)
+
+            pred_scores_out = pred_scores[:][:topk_save]
 
             return {
                 "pred_vbs_ev": pred_vbs_out,
@@ -125,7 +137,7 @@ class EvalB(nn.Module):
                     raise NotImplementedError
             else:
                 spl = "valid"
-            out_acc = self.evl_fn(fname, split_type=spl)
+            out_acc = self.evl_fn(fname, split_type=spl, dl=dl)
             val_acc = {
                 k: torch.tensor(v).to(self.device)
                 for k, v in out_acc.items()
