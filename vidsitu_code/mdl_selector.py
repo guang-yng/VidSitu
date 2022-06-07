@@ -1,12 +1,13 @@
 from vidsitu_code.mdl_sf_base import (
     LossContrastive,
-    LossEC_WPG,
     SFBase,
     TSformer,
     TSformerF,
+    TSformerEC,
     LossB,
+    Loss_WPG,
+    LossEC_WPG,
     SFFBase,
-    EventModel,
     Simple_GPT2_New,
     LossLambda,
     Simple_TxDec,
@@ -40,6 +41,10 @@ def get_mdl_loss_eval(cfg):
             return {"mdl": TSformer, "loss": LossB, "evl": EvalB}
         elif cfg.mdl.mdl_name == "timesformer_contrastive":
             return {"mdl": TSformerF, "loss": LossContrastive, "evl": EvalB}
+        elif cfg.mdl.mdl_name == "timesformer_wpg_contrastive":
+            return {"mdl": TSformerEC, "loss": Loss_WPG, "evl": EvalB}
+        elif cfg.mdl.mdl_name == "timesformer_event_contrastive":
+            return {"mdl": TSformerEC, "loss": LossEC_WPG, "evl": EvalB}
         else:
             raise NotImplementedError
     elif cfg.task_type == "vb_arg":

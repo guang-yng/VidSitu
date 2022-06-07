@@ -617,7 +617,7 @@ class Learner:
             # metric_reduced = reduce_dict(metric, average=True)
             trn_loss.add_value(out_loss)
 
-            comment_to_print = f"LossB {loss: .4f} | SmLossB {trn_loss.smooth1: .4f}"
+            comment_to_print = f"LossB {loss*self.gradient_accumulation: .4f} | SmLossB {trn_loss.smooth1: .4f}"
             if self.trn_met:
                 metric = self.eval_fn.calc_acc(out, batch)
                 trn_acc.add_value(metric)

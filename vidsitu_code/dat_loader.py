@@ -21,6 +21,7 @@ from utils.dat_utils import (
 )
 from transformers import GPT2TokenizerFast, RobertaTokenizerFast, RobertaModel
 from tqdm import tqdm
+from math import floor
 import os
 
 
@@ -85,7 +86,7 @@ class VsituDS(Dataset):
         if self.full_cfg.task_type == "vb":
             if "contrastive" in self.full_cfg.mdl.mdl_name:
                 self.comm.need_text_feats = True
-            if self.full_cfg.mdl.mdl_name == "timesformer_event_contrastive":
+            if self.full_cfg.mdl.mdl_name in ["timesformer_event_contrastive", "timesformer_wpg_contrastive"]:
                 self.comm.need_objs = True
 
         self.comm.vb_id_vocab = read_file_with_assertion(
@@ -200,6 +201,9 @@ class VsituDS(Dataset):
         if self.comm.need_text_feats:
             self.read_text_features()
 
+        if self.comm.need_objs:
+            self.read_objs()
+
     def read_text_features(self):
         if os.path.exists(self.vsitu_frm_dir/'text_feature.done'):
             return
@@ -295,6 +299,18 @@ class VsituDS(Dataset):
         del rb_mdl
         torch.cuda.empty_cache()
         print("Text Feature Processing Done!")
+
+    def read_objs(self):
+        if os.path.exists(self.vsitu_frm_dir/'objs.done'):
+            return
+        print("Start Object Bounding Box Processing ...")
+        for idx, vseg_id in enumerate(tqdm(self.vseg_lst)):
+            file_name = self.vsitu_frm_dir / vseg_id / 'objs_bbox.pt'
+            if os.path.exists(file_name):
+                continue
+            obj_bbox = self.get_objs(idx)
+            torch.save(obj_bbox, file_name)
+        print("Object Bounding Box Processing Done!")
 
     def __len__(self) -> int:
         if self.full_cfg.debug_mode:
@@ -595,6 +611,69 @@ class VsituDS(Dataset):
             ).long()
         return out_dct
 
+    def get_objs(self, idx):
+        vid_seg_name = self.vseg_lst[idx]
+
+        # Read Tracker Info
+        obj_dict = np.load(self.vsitu_obj_dir / f"{vid_seg_name}"/"obj_track.npy", allow_pickle=True).item()
+        if len(obj_dict) == 0:
+            print(vid_seg_name)
+        # assert len(obj_dict) > 0, f"No object in {vid_seg_name}."
+
+        obj_bbox = []
+        for ev in range(1, 6):
+            ev_id = f"Ev{ev}"
+            center_ix = self.comm.cent_frm_per_ev[ev_id]
+            frms_ixs_for_ev = get_sequence(
+                center_idx=center_ix,
+                half_len=self.comm.frm_seq_len // 2,
+                sample_rate=self.comm.sampling_rate,
+                max_num_frames=300,
+            )
+            n_frms = len(frms_ixs_for_ev)
+            frms_ixs_for_ev = torch.index_select(
+                torch.tensor(frms_ixs_for_ev),
+                0,
+                torch.linspace(
+                    0, n_frms-1, n_frms // self.sf_cfg.SLOWFAST.ALPHA
+                ).long()
+            )
+            confidence_list = []
+            for k in obj_dict:
+                confidence = []
+                for f in frms_ixs_for_ev:
+                    idx = str(f.item())
+                    if idx not in obj_dict[k]:
+                        confidence.append(0)
+                    else:
+                        confidence.append(obj_dict[k][idx]['confidence'])
+                conf = sum(confidence)/len(frms_ixs_for_ev)
+                if conf == 0.0:
+                    continue
+                confidence_list.append((conf, k))
+            
+            confidence_list.sort(reverse=True)
+            bbox_all = []
+            for _, k in confidence_list:
+                bbox = []
+                frm_dct = obj_dict[k]
+                for f in frms_ixs_for_ev:
+                    idx = str(f.item())
+                    if idx not in frm_dct:
+                        bbox.append([0, 0, 0, 0])
+                    else:
+                        x0, y0, x1, y1 = frm_dct[idx]['box'].tolist()
+                        assert x1 > x0
+                        assert y1 > y0
+                        bbox.append([floor(x0/1280*14), floor(y0/720*14), floor(x1/1280*14)+1, floor(y1/720*14)+1])
+                bbox_all.append(bbox)
+            if len(bbox_all) < 8:
+                rem = 8 - len(bbox_all)
+                n_frms = len(frms_ixs_for_ev)
+                bbox_all += [[[0, 0, 0, 0] for _ in range(n_frms)] for i in range(rem)]
+            obj_bbox.append(bbox_all[:8])
+        return torch.tensor(obj_bbox)
+
     def get_obj_frms_all(self, idx):
         vid_seg_name = self.vseg_lst[idx]
         frm_pth_lst = [
@@ -753,13 +832,15 @@ class VsituDS(Dataset):
             else:
                 label_out_dct['text_feature'] = torch.tensor()
                 label_out_dct['pooled_feature'] = torch.tensor()
+
+        if self.comm.need_objs:
+            file_name = self.vsitu_frm_dir / vid_seg_name / "objs_bbox.pt"
+            label_out_dct["objs_bbox"] = torch.load(file_name, map_location=torch.device('cpu'))
         
         return label_out_dct
 
     def vb_only_item_getter(self, idx: int):
         frms_out_dct = self.get_frms_all(idx)
-        if self.comm.need_objs:
-            obj_frms_out_dct = self.get_obj_frms_all(idx)
 
         frms_out_dct["vseg_idx"] = torch.tensor(idx)
         label_out_dct = self.get_label_out_dct(idx)

@@ -19,6 +19,7 @@ from vidsitu_code.hf_gpt2_fseq import HuggingFaceGPT2Decoder
 from functools import partial
 from timesformer.models.vit import TimeSformer, VisionTransformer, default_cfgs, _conv_filter
 from timesformer.models.helpers import load_pretrained
+from einops import rearrange
 
 class SlowFast_FeatModel(SlowFast):
     def forward_features(self, x):
@@ -276,9 +277,61 @@ class SFFBase(SFBase):
 
 
 class VisionTransformerF(VisionTransformer):
+    def forward_features(self, x):
+       B = x.shape[0]
+       x, T, W = self.patch_embed(x)
+       cls_tokens = self.cls_token.expand(x.size(0), -1, -1)
+       x = torch.cat((cls_tokens, x), dim=1)
+
+       ## resizing the positional embeddings in case they don't match the input at inference
+       if x.size(1) != self.pos_embed.size(1):
+           pos_embed = self.pos_embed
+           cls_pos_embed = pos_embed[0,0,:].unsqueeze(0).unsqueeze(1)
+           other_pos_embed = pos_embed[0,1:,:].unsqueeze(0).transpose(1, 2)
+           P = int(other_pos_embed.size(2) ** 0.5)
+           H = x.size(1) // W
+           other_pos_embed = other_pos_embed.reshape(1, x.size(2), P, P)
+           new_pos_embed = F.interpolate(other_pos_embed, size=(H, W), mode='nearest')
+           new_pos_embed = new_pos_embed.flatten(2)
+           new_pos_embed = new_pos_embed.transpose(1, 2)
+           new_pos_embed = torch.cat((cls_pos_embed, new_pos_embed), 1)
+           x = x + new_pos_embed
+       else:
+           x = x + self.pos_embed
+       x = self.pos_drop(x)
+
+       ## Time Embeddings
+       if self.attention_type != 'space_only':
+           cls_tokens = x[:B, 0, :].unsqueeze(1)
+           x = x[:,1:]
+           x = rearrange(x, '(b t) n m -> (b n) t m',b=B,t=T)
+           ## Resizing time embeddings in case they don't match
+           if T != self.time_embed.size(1):
+               time_embed = self.time_embed.transpose(1, 2)
+               new_time_embed = F.interpolate(time_embed, size=(T), mode='nearest')
+               new_time_embed = new_time_embed.transpose(1, 2)
+               x = x + new_time_embed
+           else:
+               x = x + self.time_embed
+           x = self.time_drop(x)
+           x = rearrange(x, '(b n) t m -> b (n t) m',b=B,t=T)
+           x = torch.cat((cls_tokens, x), dim=1)
+
+       ## Attention blocks
+       for blk in self.blocks:
+           x = blk(x, B, T, W)
+
+       ### Predictions for space-only baseline
+       if self.attention_type == 'space_only':
+           x = rearrange(x, '(b t) n m -> b t n m',b=B,t=T)
+           x = torch.mean(x, 1) # averaging predictions for every frame
+
+       x = self.norm(x)
+       return x[:, 0], x[:, 1:, :].view(B, T, 14, 14, -1)
+
     def forward(self, x):
-        x = self.forward_features(x)
-        return self.head(x), x
+        x, feat = self.forward_features(x)
+        return self.head(x), feat
 
 
 class TimeSformerF(nn.Module):
@@ -321,56 +374,27 @@ class TSformerF(nn.Module):
         return {"mdl_out": pred.view(B, 5, -1), "feat_out": feat.view(B*5, -1)}
 
 
-class EventModel(SFBase):
+class TSformerEC(nn.Module):
     def __init__(self, cfg, comm):
-        super(EventModel, self).__init__(cfg, comm)
-
-    def build_projection_head(self, cfg, out_dim=None):
-        if out_dim is None:
-            out_dim = len(self.comm.vb_id_vocab)
-        din = sum(self.head.dim_in)
-        self.proj_head_1 = nn.Linear(din, 768)
-        self.proj_head_2 = nn.Sequential(nn.Linear(768, din//2), nn.ReLU(), nn.Linear(din//2, out_dim))
-
-    def get_feats(self, inp):
-        # B x 5 x 1 x C x T x W x H + B x 5 x 4 x C x T x W x H -> (25B) x C x T x W x H
-        if self.comm.path_type == "multi":
-            slow_tensor = torch.cat([inp["frms_ev_slow_tensor"].unsqueeze(2),
-                inp["obj_frms_ev_slow_tensor"]], dim=2)
-            fast_tensor = torch.cat([inp["frms_ev_fast_tensor"].unsqueeze(2),
-                inp["obj_frms_ev_fast_tensor"]], dim=2)
-            feat_slow = combine_first_ax(combine_first_ax(slow_tensor))
-            feat_fast = combine_first_ax(combine_first_ax(fast_tensor))
-            feats_used = [feat_slow, feat_fast]
-        elif self.comm.path_type == "single":
-            fast_tensor = torch.cat([inp["frms_ev_fast_tensor"].unsqueeze(2),
-                inp["obj_frms_ev_fast_tensor"]], dim=2)
-            feat_fast = combine_first_ax(combine_first_ax(fast_tensor))
-            feats_used = [feat_fast]
-        else:
-            raise NotImplementedError
-
-        return feats_used
+        super(TSformerEC, self).__init__()
+        self.full_cfg = cfg
+        self.cfg = cfg.mdl
+        self.comm = comm
+        self.build_model()
+    
+    def build_model(self):
+        model_path = self.cfg.ts_checkpoint_file
+        self.num_class = len(self.comm.vb_id_vocab)
+        self.model = TimeSformerF(img_size=224, num_classes=self.num_class, 
+            num_frames=8, attention_type='divided_space_time', 
+            pretrained_model=model_path)
+        return
 
     def forward(self, inp: Dict):
-
-        # enc_out: List
-        # len(enc_out) = nfeats_used
-        # enc_out[0]: 25B x C x T x H x W
-        enc_out = self.forward_encoder(inp)
-
-        head_out = self.head(enc_out)
-        head_out = head_out.permute((0, 2, 3, 4, 1))
-        feat_out = self.proj_head_1(head_out)
         B = len(inp["vseg_idx"])
-        # feat_out: 25B x 768
-        feat_out = feat_out.view(5*B, 5, -1)
-        proj_out = self.proj_head_2(feat_out.sum(dim=1))
-        # proj_out: 5B x vocab_size
-        out = proj_out.view(B, 5, -1)
-        assert out.size(-1) == len(self.comm.vb_id_vocab)
-
-        return {"mdl_out": out, "feat_out": feat_out[:, 1:]}
+        feat_fast = combine_first_ax(inp["frms_ev_slow_tensor"])
+        pred, feat = self.model(feat_fast, )
+        return {"mdl_out": pred.view(B, 5, -1), "feat_out": feat.view(B, 5, 8, 14, 14, -1)}
 
 
 class LossB(nn.Module):
@@ -403,36 +427,152 @@ class LossContrastive(nn.Module):
         return {"loss": 0.5*(loss_v + loss_c)}
 
 
-class LossEC_WPG(nn.Module):
+class Loss_WPG(nn.Module):
     def __init__(self, cfg, comm):
         super().__init__()
         self.loss_verb = LossB(cfg, comm)
         self.c = nn.CrossEntropyLoss()
+        self.t = 20
         self.loss_keys = ["loss"]
+        self.normalize = torch.nn.functional.normalize
 
     def forward(self, mdl_out, inp):
         loss_v = self.loss_verb(mdl_out, inp)['loss']
 
-        # mdl_out['feat_out']: 5B x 4 x 768
-        # inp['text_feature']: B x 5 x 4 x 768
-        B5 = len(mdl_out['feat_out'])
-        print(inp['text_feature'].shape)
-        print(mdl_out['feat_out'].shape)
-        obj_feature = mdl_out['feat_out'].reshape(-1, 768)
-        arg_feature = inp['text_feature'].view(-1, 768)
-        # obj_feature: 20B x 768
-        # arg_feature: 20B x 768
-        logits = obj_feature @ arg_feature.T
-        logits = logits.view(B5, 4, B5, 4)
-        # find most matched texts for objects
-        max_values, max_indices = logits.max(dim=3)
+        # frm_feat = mdl_out['feat_out']: B x 5 x 8 x 14 x 14 x 768
+        # bbox = inp['objs_bbox']: B x 5 x 8 x 8 x 4
+        frm_feat = mdl_out['feat_out']
+        bbox = inp['objs_bbox']
 
-        max_values = max_values.permute((1, 0, 2))
-        labels = torch.cat([torch.arange(B5, device='cuda') for _ in range(4)])
-        loss_wpg = 0.5 * (self.c(max_values.reshape(-1, B5), labels)+ 
-            self.c(max_values.permute((0, 2, 1)).reshape(-1, B5), labels))
+        B = len(frm_feat)
+        obj_feat = []
+        for i in range(B):
+            obj_feat.append([])
+            for ev in range(5):
+                obj_feat[-1].append([])
+                for obj in bbox[i][ev]:
+                    feat_obj = []
+                    for t in range(8):
+                        if obj[t][0] == obj[t][2] or obj[t][1] == obj[t][3]:
+                            feat = torch.zeros((768), device="cuda")
+                        else:
+                            feat = frm_feat[i, ev, t, obj[t][0]:obj[t][2], obj[t][1]:obj[t][3], :].mean(dim=(0, 1))
+                        feat_obj.append(feat.view(768))
+                    obj_feat[-1][-1].append(torch.stack(feat_obj).mean(dim=0))
+                obj_feat[-1][-1] = self.normalize(torch.stack(obj_feat[-1][-1]))
+            obj_feat[-1] = torch.stack(obj_feat[-1])
+
+        # obj_feat: B x 5 x 8 x 768
+        # txt_feat: B x 5 x 4 x 768
+        obj_feat = torch.stack(obj_feat)
+        txt_feat = self.normalize(inp['text_feature'], dim=3)
+
+        obj_feature = obj_feat.view(-1, 768)
+        arg_feature = torch.cat([txt_feat[:, :, 0:1, :], txt_feat[:, :, 2:, :]], dim=2).view(-1, 768)
+        # obj_feature: 40B x 768
+        # arg_feature: 15B x 768
+        logits = arg_feature @ obj_feature.T * self.t
+        logits = logits.view(B*5, 3, B*5, 8)
+        # find most matched texts for objects
+        _, max_indices = logits.max(dim=3)
+        logits = logits.view(B*5, 3, -1)
+        labels = torch.cat([torch.tensor([max_indices[i, j, i]+(i<<3) for j in range(3)], device="cuda") for i in range(B*5)], dim=0)
+
+        loss_wpg = self.c(logits.reshape(B*15, -1), labels)
 
         return {"loss": 0.5*(loss_wpg+loss_v)}
+
+
+class LossEC_WPG(nn.Module):
+    def __init__(self, cfg, comm):
+        super().__init__()
+        self.loss_verb = LossB(cfg, comm)
+        self.threshold = 1
+        self.t = 20
+        self.c = nn.CrossEntropyLoss()
+        self.loss_keys = ["loss"]
+        self.normalize = torch.nn.functional.normalize
+
+    def forward(self, mdl_out, inp):
+        loss_v = self.loss_verb(mdl_out, inp)['loss']
+
+        # frm_feat = mdl_out['feat_out']: B x 5 x 8 x 14 x 14 x 768
+        # bbox = inp['objs_bbox']: B x 5 x 8 x 8 x 4
+        frm_feat = mdl_out['feat_out']
+        bbox = inp['objs_bbox']
+
+        B = len(frm_feat)
+        obj_feat = []
+        for i in range(B):
+            obj_feat.append([])
+            for ev in range(5):
+                obj_feat[-1].append([])
+                for obj in bbox[i][ev]:
+                    feat_obj = []
+                    for t in range(8):
+                        if obj[t][0] == obj[t][2] or obj[t][1] == obj[t][3]:
+                            feat = torch.zeros((768), device="cuda")
+                        else:
+                            feat = frm_feat[i, ev, t, obj[t][0]:obj[t][2], obj[t][1]:obj[t][3], :].mean(dim=(0, 1))
+                        feat_obj.append(feat.view(768))
+                    obj_feat[-1][-1].append(torch.stack(feat_obj).mean(dim=0))
+                obj_feat[-1][-1] = self.normalize(torch.stack(obj_feat[-1][-1]))
+            obj_feat[-1] = torch.stack(obj_feat[-1])
+
+        # obj_feat: B x 5 x 8 x 768
+        # txt_feat: B x 5 x 4 x 768
+        obj_feat = torch.stack(obj_feat)
+        txt_feat = self.normalize(inp['text_feature'], dim=3)
+
+        obj_feature = obj_feat.view(-1, 768)
+        arg_feature = torch.cat([txt_feat[:, :, 0:1, :], txt_feat[:, :, 2:, :]], dim=2).view(-1, 768)
+        # obj_feature: 40B x 768
+        # arg_feature: 15B x 768
+        logits = arg_feature @ obj_feature.T * self.t
+        logits = logits.view(B*5, 3, B*5, 8)
+        # find most matched texts for objects
+        max_value, max_indices = logits.max(dim=3)
+        logits = logits.view(B*5, 3, -1)
+        labels = torch.cat([torch.tensor([max_indices[i, j, i]+(i<<3) for j in range(3)], device="cuda") for i in range(B*5)], dim=0)
+
+        loss_wpg = self.c(logits.reshape(B*15, -1), labels)
+        mask = max_value > self.threshold
+
+        mask = (mask.transpose(0, 1) * torch.eye(5*B, device="cuda")).sum(dim=2, dtype=torch.bool).transpose(0, 1)
+        max_indices = (max_indices.transpose(0, 1) * torch.eye(5*B, device="cuda")).sum(dim=2, dtype=torch.long).transpose(0, 1)
+
+        arg_feature = arg_feature.view(5*B, 3, 768)
+        txt_feat = txt_feat.view(5*B, 4, 768)
+        te_feature = (arg_feature.permute( (2, 0, 1)) * mask).sum(dim = 2).T + txt_feat[:, 1, :]
+        # te_feature = []
+        # for i in range(5*B):
+        #     te_feature.append(
+        #         (torch.transpose(arg_feature[i, :, :], 0, 1) * mask[i, :]).sum(dim=1) + txt_feat[i, 1, :]
+        #     )
+        # te_feature = torch.stack(te_feature)
+
+        obj_feature = obj_feature.view(5*B, 8, 768)
+        ve_feature = []
+        for i in range(5*B):
+            ve_feature.append(
+                torch.index_select(
+                    obj_feature[i, :, :], dim=0, 
+                    index=torch.masked_select(max_indices[i, :], mask[i, :])
+                ).sum(dim=0)
+            )
+        ve_feature = torch.stack(ve_feature)
+
+        te_feature = self.normalize(te_feature, dim=1)
+        ve_feature = self.normalize(ve_feature, dim=1)
+
+        logits = te_feature @ ve_feature.T * self.t
+
+        labels = torch.arange(5*B, device="cuda")
+        loss_1 = self.c(logits, labels)
+        loss_2 = self.c(logits.T, labels)
+        loss_ec = (loss_1+loss_2)/2
+
+        return {"loss": (loss_wpg+loss_v+loss_ec)/3}
 
 
 class LossLambda(nn.Module):
