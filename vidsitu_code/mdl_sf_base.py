@@ -346,6 +346,9 @@ class TimeSformerF(nn.Module):
         if self.pretrained:
             load_pretrained(self.model, num_classes=self.model.num_classes, in_chans=kwargs.get('in_chans', 3), filter_fn=_conv_filter, img_size=img_size, num_frames=num_frames, num_patches=self.num_patches, attention_type=self.attention_type, pretrained_model=pretrained_model)
 
+    def forward_encoder(self, x):
+        return self.model.forward_features(x)
+
     def forward(self, x):
         x, feat = self.model(x)
         return x, feat
@@ -389,6 +392,36 @@ class TSformerEC(nn.Module):
             num_frames=8, attention_type='divided_space_time', 
             pretrained_model=model_path)
         return
+
+    def forward_encoder(self, inp: Dict):
+        B = len(inp["vseg_idx"])
+        feat_fast = combine_first_ax(inp["frms_ev_slow_tensor"])
+        cls_feat, frm_feat = self.model.forward_encoder(feat_fast, )
+        bbox = inp['objs_bbox']
+        frm_feat = frm_feat.view(B, 5, 8, 14, 14, -1)
+
+        B = len(frm_feat)
+        obj_feat = []
+        for i in range(B):
+            obj_feat.append([])
+            for ev in range(5):
+                obj_feat[-1].append([])
+                for obj in bbox[i][ev]:
+                    feat_obj = []
+                    for t in range(8):
+                        if obj[t][0] == obj[t][2] or obj[t][1] == obj[t][3]:
+                            feat = torch.zeros((768), device="cuda")
+                        else:
+                            feat = frm_feat[i, ev, t, obj[t][0]:obj[t][2], obj[t][1]:obj[t][3], :].mean(dim=(0, 1))
+                        feat_obj.append(feat.view(768))
+                    obj_feat[-1][-1].append(torch.stack(feat_obj).mean(dim=0))
+                obj_feat[-1][-1] = torch.nn.functional.normalize(torch.stack(obj_feat[-1][-1]))
+            obj_feat[-1] = torch.stack(obj_feat[-1])
+
+        # obj_feat: B x 5 x 8 x 768
+        obj_feat = torch.stack(obj_feat).sum(dim=2)
+        all_feat = torch.cat([cls_feat.view(B, 5, -1), obj_feat], dim=-1)
+        return torch.nn.functional.normalize(all_feat, dim=2)
 
     def forward(self, inp: Dict):
         B = len(inp["vseg_idx"])

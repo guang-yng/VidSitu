@@ -104,17 +104,20 @@ class FeatExtract:
     def forward_all(self):
         vseg_lst = self.dl.dataset.vseg_lst
         for batch in tqdm(self.dl):
+            B = len(batch["vseg_idx"])
             batch_gpu = move_to(batch, torch.device("cuda"))
             feat_out = self.mdl.forward_encoder(batch_gpu)
-            head_out = self.mdl.head(feat_out)
-            # (B, C, T, H, W) -> (B, T, H, W, C).
-            head_out = head_out.permute((0, 2, 3, 4, 1))
-            B = len(batch["vseg_idx"])
-            assert head_out.size(1) == 1
-            assert head_out.size(2) == 1
-            assert head_out.size(3) == 1
-            out = head_out.view(B, 5, -1)
-            out_np = out.cpu().numpy()
+            if isinstance(feat_out, dict):
+                head_out = self.mdl.head(feat_out)
+                # (B, C, T, H, W) -> (B, T, H, W, C).
+                head_out = head_out.permute((0, 2, 3, 4, 1))
+                assert head_out.size(1) == 1
+                assert head_out.size(2) == 1
+                assert head_out.size(3) == 1
+                out = head_out.view(B, 5, -1)
+                out_np = out.cpu().numpy()
+            else:
+                out_np = feat_out.cpu().numpy()
 
             for vix in range(B):
                 vseg_ix = batch["vseg_idx"][vix]
@@ -154,7 +157,7 @@ def main(mdl_resume_path: str, mdl_name_used: str, is_cu: bool = False, **kwargs
     get_default_net = mdl_loss_eval["mdl"]
 
     # for split_type in ["train", "valid", "test"]:
-    ds = VsituDS_All(cfg, {}, split_type="train")
+    ds = VsituDS(cfg, {}, split_type="train")
     comm = ds.comm
     mdl = get_default_net(cfg=cfg, comm=comm)
     if not is_cu:
@@ -178,7 +181,7 @@ def main(mdl_resume_path: str, mdl_name_used: str, is_cu: bool = False, **kwargs
     for split_type in ["valid", "train", "test_verb", "test_srl", "test_evrel"]:
         if comm is None:
             comm = {}
-        ds = VsituDS_All(cfg, comm, split_type=split_type)
+        ds = VsituDS(cfg, comm, split_type=split_type)
         comm = ds.comm
         batch_collator = BatchCollator(cfg, ds.comm)
         dl = get_dataloader(cfg, ds, is_train=False, collate_fn=batch_collator)
